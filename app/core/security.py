@@ -1,13 +1,13 @@
 from fastapi import HTTPException, status
 import jwt
 from pwdlib import PasswordHash
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
 
 def create_token(data: dict, expire_minutes: int):
     to_encode = data.copy()
-    expire = datetime.now() + timedelta(minutes=expire_minutes)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
     to_encode.update({"exp": expire})
 
     return jwt.encode(to_encode, settings.SECRET_KEY, settings.ALGORITHM)
