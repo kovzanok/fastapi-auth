@@ -2,8 +2,6 @@ from fastapi_mail import FastMail, MessageSchema,ConnectionConfig
 
 from app.core.config import settings
 
-def get_email_service() -> EmailService:
-    return EmailService()
 
 class EmailService:
     def __init__(self):
@@ -30,3 +28,8 @@ class EmailService:
             )
         
         await self.fm.send_message(message)
+
+email_service = EmailService()
+
+def get_email_service() -> EmailService:
+    return email_service
