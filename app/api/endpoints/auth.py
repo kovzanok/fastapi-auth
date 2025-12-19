@@ -1,108 +1,61 @@
 from typing import Annotated
 from fastapi import APIRouter, Depends, Response, status, HTTPException
-from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
 from redis.asyncio import Redis
 
-from app.services.email import get_email_service, EmailService
-from app.db.database import get_db_session
-from app.db.models import User
+from app.services.auth import AuthService
 from app.api.schemas.user import UserRegister, UserLogin
-from app.core.config import settings
-from app.core.redis import get_redis
-from app.core.security import create_token, get_email_from_token, hash_password, verify_password
+from app.exceptions.auth import ExpiredToken, InvalidCredentials, UserAlreadyExists, InvalidToken, UserNotFound, AlreadyVerifiedUser, UserNotVerified
+from app.dependencies.auth import get_auth_service
 
 auth_router = APIRouter(prefix="/auth", tags=['auth'])
 
-@auth_router.post("/register")
+@auth_router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(register_user_data: UserRegister,
-                   response: Response, 
-                   session: Annotated[AsyncSession, Depends(get_db_session)],
-                   email_service: Annotated[EmailService, Depends(get_email_service)],
-                   cache: Annotated[Redis, Depends(get_redis)]
+                   auth_service: Annotated[AuthService, Depends(get_auth_service)]
                 ):
     register_dict = register_user_data.model_dump()
-
-    new_user = User(email=register_dict.get("email"),
-                    password=hash_password(register_dict.get("password")),
-                    role=register_dict.get("role"))
-
     try:
-        session.add(new_user)
-        await session.commit()
-        await session.refresh(new_user)
-    except IntegrityError:
-        await session.rollback()
-        response.status_code = status.HTTP_400_BAD_REQUEST
-        return {"error": f"User with provided email({register_dict["email"]}) already exists"}
-
-    verification_token = create_token({"sub": register_dict["email"]}, settings.VERIFICATION_TOKEN_EXPIRE_MINUTES)
-
-    await cache.set(f"verification_token:{register_dict.get("email")}", 
-              verification_token, 
-              ex=settings.VERIFICATION_TOKEN_EXPIRE_MINUTES*60)
+        await auth_service.register(email=register_dict.get("email"),
+                                    password=register_dict.get("password"),
+                                    role=register_dict.get("role"))
+    except UserAlreadyExists:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"User with provided email({register_dict.get("email")}) already exists")
     
-    await email_service.send_message("Email confirmation", f"""To verify your email follow the link: \n
-                                     {settings.DOMAIN}/auth/verify/{verification_token}""", 
-                                     register_dict.get("email"))
+    return {"message": "User successfully created"}
 
 @auth_router.get("/verify/{verification_token}")
 async def verify_email(verification_token: str, 
-                       session: Annotated[AsyncSession, Depends(get_db_session)], 
-                       cache: Annotated[Redis, Depends(get_redis)]):
-    user_email = get_email_from_token(verification_token)
-
-    token_value = await cache.get(f"verification_token:{user_email}")
-
-    if not token_value:
-         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token not found")
-
-    result = await session.execute(select(User).where(User.email == user_email))
-    user: User = result.scalars().first()
-
-    if not user:
+                       auth_service: Annotated[AuthService, Depends(get_auth_service)]):
+    try:
+        await auth_service.verify(verification_token)
+    except InvalidToken:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    except UserNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    
-    if user.is_verified:
+    except ExpiredToken:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token signature expired")
+    except AlreadyVerifiedUser:
         return {"message":"Email is already verified"}
     
-    await session.execute(update(User).where(User.email == user_email).values(is_verified = True))
-    await session.commit()
-    await cache.delete(f"verification_token:{user_email}")
-
     return {"message":"Email is verified"}
 
 @auth_router.post("/login")
 async def login(login_user_data: UserLogin,
                 response: Response, 
-                session: Annotated[AsyncSession, Depends(get_db_session)],
-                email_service: Annotated[EmailService, Depends(get_email_service)], 
-                cache: Annotated[Redis, Depends(get_redis)]):
+                auth_service: Annotated[AuthService, Depends(get_auth_service)]):
     login_dict = login_user_data.model_dump()
-    user_email = login_dict.get("email")
-
-    result = await session.execute(select(User).where(User.email == user_email))
-    user: User = result.scalars().first()
-
-    if not user or not verify_password(login_dict.get("password"), user.password):
+    try:
+        tokens = await auth_service.login(email=login_dict.get("email"),
+                                    password=login_dict.get("password"),)
+    except InvalidCredentials:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credentials")
-
-    if not user.is_verified:
-        token_value = await cache.get(f"verification_token:{user_email}")
-        if not token_value:
-            verification_token = create_token({"sub": user_email}, settings.VERIFICATION_TOKEN_EXPIRE_MINUTES)
-            await cache.set(f"verification_token:{user_email}", 
-              verification_token, 
-              ex=settings.VERIFICATION_TOKEN_EXPIRE_MINUTES*60)
-            await email_service.send_message("Email confirmation", f"""To verify your email follow the link: \n
-                                     {settings.DOMAIN}/auth/verify/{verification_token}""", 
-                                     user_email)
+    except UserNotVerified:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User email is not verified. Check your email for verification")
+    
+    response.set_cookie("refresh_token", tokens.get("refresh_token"), httponly=True)
 
-    access_token = create_token({"sub": user_email}, settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    refresh_token = create_token({"sub": user_email}, settings.REFRESH_TOKEN_EXPIRE_MINUTES)
+    return {"token": tokens.get("access_token")}
 
-    response.set_cookie("refresh_token", refresh_token, httponly=True)
-
-    return {"token": access_token}
+    

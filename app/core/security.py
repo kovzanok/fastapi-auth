@@ -1,9 +1,9 @@
-from fastapi import HTTPException, status
 import jwt
 from pwdlib import PasswordHash
 from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
+from app.exceptions.auth import ExpiredToken, InvalidToken
 
 def create_token(data: dict, expire_minutes: int):
     to_encode = data.copy()
@@ -18,11 +18,11 @@ def get_email_from_token(token: str) -> str:
         email: str = payload.get("sub")
 
         if not email:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+            raise InvalidToken()
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token signature expired")
+        raise ExpiredToken()
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise InvalidToken()
 
     return email
 
