@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Response, status, HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from redis import Redis
+from redis.asyncio import Redis
 
 from app.services.email import get_email_service, EmailService
 from app.db.database import get_db_session
@@ -38,7 +38,7 @@ async def register(register_user_data: UserRegister,
 
     verification_token = create_token({"sub": register_dict["email"]}, settings.VERIFICATION_TOKEN_EXPIRE_MINUTES)
 
-    cache.set(f"verification_token:{register_dict.get("email")}", 
+    await cache.set(f"verification_token:{register_dict.get("email")}", 
               verification_token, 
               ex=settings.VERIFICATION_TOKEN_EXPIRE_MINUTES*60)
     
@@ -52,7 +52,7 @@ async def verify_email(verification_token: str,
                        cache: Annotated[Redis, Depends(get_redis)]):
     user_email = get_email_from_token(verification_token)
 
-    token_value = cache.get(f"verification_token:{user_email}")
+    token_value = await cache.get(f"verification_token:{user_email}")
 
     if not token_value:
          raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token not found")
@@ -68,7 +68,7 @@ async def verify_email(verification_token: str,
     
     await session.execute(update(User).where(User.email == user_email).values(is_verified = True))
     await session.commit()
-    cache.delete(f"verification_token:{user_email}")
+    await cache.delete(f"verification_token:{user_email}")
 
     return {"message":"Email is verified"}
 
@@ -88,10 +88,10 @@ async def login(login_user_data: UserLogin,
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credentials")
 
     if not user.is_verified:
-        token_value = cache.get(f"verification_token:{user_email}")
+        token_value = await cache.get(f"verification_token:{user_email}")
         if not token_value:
             verification_token = create_token({"sub": user_email}, settings.VERIFICATION_TOKEN_EXPIRE_MINUTES)
-            cache.set(f"verification_token:{user_email}", 
+            await cache.set(f"verification_token:{user_email}", 
               verification_token, 
               ex=settings.VERIFICATION_TOKEN_EXPIRE_MINUTES*60)
             await email_service.send_message("Email confirmation", f"""To verify your email follow the link: \n

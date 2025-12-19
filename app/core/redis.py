@@ -1,9 +1,9 @@
-import redis
+from redis.asyncio import Redis, ConnectionPool
 
 from app.core.config import settings
 
 def create_redis():
-  return redis.ConnectionPool(
+  return ConnectionPool(
     host=settings.REDIS_HOST, 
     port=settings.REDIS_PORT, 
     db=0, 
@@ -12,5 +12,5 @@ def create_redis():
 
 pool = create_redis()
 
-def get_redis() -> redis.Redis:
-  return redis.Redis(connection_pool=pool)
+def get_redis() -> Redis:
+  return Redis(connection_pool=pool)
