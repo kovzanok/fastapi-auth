@@ -33,6 +33,7 @@ async def register(register_user_data: UserRegister,
         await session.commit()
         await session.refresh(new_user)
     except IntegrityError:
+        await session.rollback()
         response.status_code = status.HTTP_400_BAD_REQUEST
         return {"error": f"User with provided email({register_dict["email"]}) already exists"}
 
