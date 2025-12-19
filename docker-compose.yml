@@ -1,0 +1,36 @@
+version: '3'
+
+services:
+  redis:
+    image: redis:latest
+    restart: always
+    ports:
+      - "${REDIS_PORT}:6379"
+    env_file:
+      - .env
+    volumes: 
+      - cache:/data
+
+  postgres:
+    image: postgres:latest
+    container_name: mypostgres
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "${DB_PORT}:5432"
+    env_file:
+      - .env
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+    volumes:
+      - pgdata:/var/lib/postgresql
+volumes:
+  pgdata:
+  cache:
+    driver: local
