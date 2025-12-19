@@ -1,5 +1,6 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Response, status, HTTPException
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from redis import Redis
@@ -10,7 +11,7 @@ from app.db.models import User
 from app.api.schemas.user import UserRegister
 from app.core.config import settings
 from app.core.redis import get_redis
-from app.core.security import create_token, hash_password
+from app.core.security import create_token, get_email_from_token, hash_password
 
 auth_router = APIRouter(prefix="/auth", tags=['auth'])
 
@@ -44,3 +45,29 @@ async def register(register_user_data: UserRegister,
     await email_service.send_message("Email confirmation", f"""To verify your email follow the link: \n
                                      {settings.DOMAIN}/auth/verify/{verification_token}""", 
                                      register_dict.get("email"))
+
+@auth_router.get("/verify/{verification_token}")
+async def verify_email(verification_token: str, 
+                       session: Annotated[AsyncSession, Depends(get_db_session)], 
+                       cache: Annotated[Redis, Depends(get_redis)]):
+    user_email = get_email_from_token(verification_token)
+
+    token_value = cache.get(f"verification_token:{user_email}")
+
+    if not token_value:
+         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token not found")
+
+    result = await session.execute(select(User).where(User.email == user_email))
+    user: User = result.scalars().first()
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    if user.is_verified:
+        return {"message":"Email is already verified"}
+    
+    await session.execute(update(User).where(User.email == user_email).values(is_verified = True))
+    await session.commit()
+    cache.delete(f"verification_token:{user_email}")
+
+    return {"message":"Email is verified"}
