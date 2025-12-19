@@ -1,7 +1,5 @@
 from typing import Annotated
 from fastapi import APIRouter, Depends, Response, status, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from redis.asyncio import Redis
 
 from app.services.auth import AuthService
 from app.api.schemas.user import UserRegister, UserLogin
