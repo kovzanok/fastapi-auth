@@ -1,0 +1,38 @@
+from typing import Annotated
+from fastapi import APIRouter, Depends, Response, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
+
+from app.services.email import get_email_service, EmailService
+from app.db.database import get_db_session
+from app.db.models import User
+from app.api.schemas.user import UserRegister
+from app.core.config import settings
+from app.core.security import create_token, hash_password
+
+auth_router = APIRouter(prefix="/auth", tags=['auth'])
+
+@auth_router.post("/register")
+async def register(register_user_data: UserRegister,
+                   response: Response, 
+                   session: Annotated[AsyncSession, Depends(get_db_session)],
+                   email_service: Annotated[EmailService, Depends(get_email_service)]
+                ):
+    register_dict = register_user_data.model_dump()
+
+    new_user = User(email=register_dict.get("email"),
+                    password=hash_password(register_dict.get("password")),
+                    role=register_dict.get("role"))
+
+    try:
+        session.add(new_user)
+        await session.commit()
+        await session.refresh(new_user)
+    except IntegrityError:
+        response.status_code = status.HTTP_400_BAD_REQUEST
+        return {"error": f"User with provided email({register_dict["email"]}) already exists"}
+
+    verification_token = create_token({"sub": register_dict["email"]}, settings.VERIFICATION_TOKEN_EXPIRE_MINUTES)
+    await email_service.send_message("Email confirmation", f"""To verify your email follow the link: \n
+                                     {settings.DOMAIN}/auth/verify/{verification_token}""", 
+                                     register_dict.get("email"))
