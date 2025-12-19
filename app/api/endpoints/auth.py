@@ -7,6 +7,7 @@ from app.services.auth import AuthService
 from app.api.schemas.user import UserRegister, UserLogin
 from app.exceptions.auth import ExpiredToken, InvalidCredentials, UserAlreadyExists, InvalidToken, UserNotFound, AlreadyVerifiedUser, UserNotVerified
 from app.dependencies.auth import get_auth_service
+from app.core.config import settings
 
 auth_router = APIRouter(prefix="/auth", tags=['auth'])
 
@@ -54,7 +55,7 @@ async def login(login_user_data: UserLogin,
     except UserNotVerified:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User email is not verified. Check your email for verification")
     
-    response.set_cookie("refresh_token", tokens.get("refresh_token"), httponly=True)
+    response.set_cookie("refresh_token", tokens.get("refresh_token"), httponly=True, secure=True, samesite='strict', max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60)
 
     return {"token": tokens.get("access_token")}
 
