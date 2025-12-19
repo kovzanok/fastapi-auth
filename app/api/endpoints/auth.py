@@ -8,10 +8,10 @@ from redis import Redis
 from app.services.email import get_email_service, EmailService
 from app.db.database import get_db_session
 from app.db.models import User
-from app.api.schemas.user import UserRegister
+from app.api.schemas.user import UserRegister, UserLogin
 from app.core.config import settings
 from app.core.redis import get_redis
-from app.core.security import create_token, get_email_from_token, hash_password
+from app.core.security import create_token, get_email_from_token, hash_password, verify_password
 
 auth_router = APIRouter(prefix="/auth", tags=['auth'])
 
@@ -71,3 +71,37 @@ async def verify_email(verification_token: str,
     cache.delete(f"verification_token:{user_email}")
 
     return {"message":"Email is verified"}
+
+@auth_router.post("/login")
+async def login(login_user_data: UserLogin,
+                response: Response, 
+                session: Annotated[AsyncSession, Depends(get_db_session)],
+                email_service: Annotated[EmailService, Depends(get_email_service)], 
+                cache: Annotated[Redis, Depends(get_redis)]):
+    login_dict = login_user_data.model_dump()
+    user_email = login_dict.get("email")
+
+    result = await session.execute(select(User).where(User.email == user_email))
+    user: User = result.scalars().first()
+
+    if not user or not verify_password(login_dict.get("password"), user.password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credentials")
+
+    if not user.is_verified:
+        token_value = cache.get(f"verification_token:{user_email}")
+        if not token_value:
+            verification_token = create_token({"sub": user_email}, settings.VERIFICATION_TOKEN_EXPIRE_MINUTES)
+            cache.set(f"verification_token:{user_email}", 
+              verification_token, 
+              ex=settings.VERIFICATION_TOKEN_EXPIRE_MINUTES*60)
+            await email_service.send_message("Email confirmation", f"""To verify your email follow the link: \n
+                                     {settings.DOMAIN}/auth/verify/{verification_token}""", 
+                                     user_email)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User email is not verified. Check your email for verification")
+
+    access_token = create_token({"sub": user_email}, settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token = create_token({"sub": user_email}, settings.REFRESH_TOKEN_EXPIRE_MINUTES)
+
+    response.set_cookie("refresh_token", refresh_token, httponly=True)
+
+    return {"token": access_token}
