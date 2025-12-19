@@ -13,12 +13,17 @@ def create_token(data: dict, expire_minutes: int):
     return jwt.encode(to_encode, settings.SECRET_KEY, settings.ALGORITHM)
 
 def get_email_from_token(token: str) -> str:
-    payload = jwt.decode(token, settings.SECRET_KEY,algorithms=[settings.ALGORITHM])
-    email: str = payload.get("sub")
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY,algorithms=[settings.ALGORITHM])
+        email: str = payload.get("sub")
 
-    if not email:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    
+        if not email:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token signature expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
     return email
 
 password_hash = PasswordHash.recommended()
