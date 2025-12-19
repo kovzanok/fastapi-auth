@@ -6,6 +6,9 @@ class Settings(BaseSettings):
         env_file=find_dotenv()
     )
 
+    REDIS_HOST: str
+    REDIS_PORT: str
+
     DB_HOST: str
     DB_PORT: str
     DB_USER: str
